@@ -1,0 +1,13 @@
+{
+  "name": "Tessera Bar Turno A",
+  "short_name": "Tessera Bar",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#bf3033",
+  "icons": [
+    { "src": "/pompieri-bar.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/pompieri-bar.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#bf3033"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/pompieri-bar.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><title>Tessera Bar Turno A</title>
+<style>
+*{box-sizing:border-box}:root{--red:#bf3033;--ink:#202a35;--muted:#737b86;--bg:#f5f5f2;--line:#e7e8e5;--green:#247c5c}
+body{margin:0;background:var(--bg);font:15px/1.5 'Segoe UI',Arial,sans-serif;color:var(--ink)}
+button,input,select,textarea{font:inherit}button{cursor:pointer;border:0;border-radius:8px;padding:10px 16px;font-weight:600;font-size:13px}
+.primary{background:var(--red);color:#fff}.ghost{background:#fff;border:1px solid var(--line);color:var(--ink)}.full{width:100%}
+button:disabled{opacity:.4;cursor:not-allowed}
+input,select,textarea{display:block;width:100%;border:1px solid #dfe3e3;border-radius:7px;padding:10px;margin:6px 0 14px;background:#fff}
+label{font-size:12px;font-weight:600;display:block}.muted{color:var(--muted)}.tiny{font-size:12px}
+h1{font-size:26px;margin:0 0 4px}h2{font-size:18px;margin:0 0 12px}
+header{background:#fff;border-bottom:1px solid var(--line);padding:12px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+header b{margin-right:auto;color:var(--red);font-size:16px}
+nav{display:flex;gap:4px;overflow-x:auto;padding:8px 16px;background:#fff;border-bottom:1px solid var(--line)}
+nav button{background:none;color:#646e7a;white-space:nowrap}nav button.on{background:#f9eaea;color:var(--red)}
+main{max-width:1000px;margin:auto;padding:20px 16px 60px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:11px;padding:18px;margin-bottom:16px;overflow:auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.prod{background:#fff;border:1px solid var(--line);text-align:left;padding:14px;border-radius:10px}
+.prod span{font-size:26px;display:block}.prod small{color:var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:700px){.two{grid-template-columns:1fr}}
+table{border-collapse:collapse;width:100%;white-space:nowrap}td,th{padding:10px;border-bottom:1px solid #eee;text-align:left;font-size:13px}th{font-size:11px;color:#939aa2;text-transform:uppercase}
+.pos{color:var(--green)}.neg{color:#b14b48}.right{text-align:right}
+.card{background:linear-gradient(120deg,#9b222d,#c33a39);color:#fff;border-radius:16px;padding:24px}.card h2{font-size:40px;margin:10px 0}
+.qr{max-width:220px;margin:auto;background:#fff;border-radius:10px}.qr svg{width:100%;height:auto;display:block}
+.pill{font-size:11px;background:#f1f2f0;border:1px solid var(--line);padding:3px 8px;border-radius:5px}
+.note{padding:12px 0;border-bottom:1px solid var(--line)}.note.un{font-weight:600}
+dialog{border:0;border-radius:14px;max-width:700px;width:calc(100% - 24px);padding:22px;max-height:90vh}dialog::backdrop{background:#17212db0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#202d38;color:#fff;padding:12px 20px;border-radius:10px;z-index:99999;display:none;max-width:90vw}
+.login{max-width:380px;margin:12vh auto;background:#fff;padding:28px;border-radius:16px;border:1px solid var(--line)}
+video{width:100%;max-height:260px;background:#202a35;border-radius:8px}
+</style></head>
+<body>
+<div id="app"><p style="text-align:center;margin-top:30vh">Caricamento…</p></div>
+<dialog id="modal"></dialog><div id="toast"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script>
+/* ============ CONFIGURAZIONE: INCOLLA QUI I TUOI DATI FIREBASE ============ */
+const FIREBASE_CONFIG = {
+  apiKey: "INCOLLA",
+  authDomain: "INCOLLA",
+  projectId: "INCOLLA",
+  messagingSenderId: "INCOLLA",
+  appId: "INCOLLA"
+};
+const VAPID_KEY = "";                         // chiave web push (Firebase > Cloud Messaging). Vuota = niente push, solo avvisi in app
+const PUSH_URL  = "/.netlify/functions/notify"; // funzione Netlify per le push
+/* ========================================================================= */
+
+firebase.initializeApp(FIREBASE_CONFIG);
+const db = firebase.firestore(), FV = firebase.firestore.FieldValue;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const euro = n => (n/100).toLocaleString('it-IT',{style:'currency',currency:'EUR'});
+const fdate = s => new Date(s).toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'});
+const name = u => u ? u.first+' '+u.last : '—';
+const rnd = () => Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b=>b.toString(16).padStart(2,'0')).join('');
+async function sha(s){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s)))).map(b=>b.toString(16).padStart(2,'0')).join('');}
+function money(v){if(!/^\d+([.,]\d{1,2})?$/.test(String(v).trim()))throw Error('Importo non valido (es. 1,50)');const n=Math.round(Number(String(v).replace(',','.'))*100);if(n<=0)throw Error('Importo non valido');return n;}
+function slug(v){return v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');}
+function toast(s){const t=$('#toast');t.textContent=s;t.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>t.style.display='none',4000);}
+function modal(title,body){$('#modal').innerHTML=`<div class="row" style="justify-content:space-between"><h2>${title}</h2><button class="ghost" data-act="close">✕</button></div>${body}`;$('#modal').showModal();}
+function closeModal(){stopCam();$('#modal').close();}
+
+let me=null,page='home',mode='op',users=[],products=[],events=[],tx=[],notes=[],selected='',cart={},kind='debit',unsubs=[],firstNotes=true,stream=null,scanT=null,dirty=false;
+const isStaff=()=>me&&me.role!=='user';
+const op=()=>isStaff()&&mode==='op';
+const U=id=>users.find(u=>u.id===id)||(me&&me.id===id?me:null);
+const ICONS=['☕','🥐','🥪','🍹','🥤','🍫','🍕','🍦','🎗️'];
+
+/* ---------- avvio ---------- */
+async function start(){
+  try{
+    const a=await db.collection('users').doc('admin').get();
+    if(!a.exists) await db.collection('users').doc('admin').set({id:'admin',username:'admin',first:'Admin',last:'Turno A',role:'admin',pass:await sha('admin'),balance:0,token:rnd(),createdAt:new Date().toISOString()});
+    const ps=await db.collection('products').limit(1).get();
+    if(ps.empty) for(const [title,price,icon] of [['Caffè',50,'☕'],['Colazione',150,'🥐'],['Tavola calda',200,'🥪'],['Mezza colazione',100,'🥐'],['Mezza tavola calda',100,'🥪'],['Aperitivo',150,'🍹'],['Gelato',100,'🍦']]){const r=db.collection('products').doc();await r.set({id:r.id,title,price,icon,active:true});}
+    const id=localStorage.getItem('bar-user');
+    if(id){const d=await db.collection('users').doc(id).get();if(d.exists)return session(d.data());}
+    loginView();
+  }catch(e){$('#app').innerHTML=`<div class="login"><h2>Errore di collegamento</h2><p class="muted">${esc(e.message)}</p><p class="tiny">Controlla la configurazione Firebase in cima a index.html e che Firestore sia attivo con regole aperte.</p></div>`;}
+}
+function loginView(){
+  $('#app').innerHTML=`<div class="login"><h1>🚒 Tessera Bar</h1><p class="muted">Turno A · Vigili del Fuoco</p>
+  <form id="login"><label>Nome utente<input name="u" autocomplete="username" required></label><label>Password<input name="p" type="password" autocomplete="current-password" required></label><button class="primary full">Accedi</button></form></div>`;
+}
+function session(u){
+  unsubs.forEach(f=>f());unsubs=[];me=u;firstNotes=true;mode=u.role==='user'?'user':'op';page=op()?'home':'card';
+  const R=()=>render();
+  if(isStaff()){
+    unsubs.push(db.collection('users').onSnapshot(s=>{users=s.docs.map(d=>d.data()).sort((a,b)=>(a.last+a.first).localeCompare(b.last+b.first));const m=users.find(x=>x.id===me.id);if(m)me=m;R();}));
+    unsubs.push(db.collection('tx').orderBy('at','desc').limit(300).onSnapshot(s=>{tx=s.docs.map(d=>d.data());R();}));
+  }else{
+    unsubs.push(db.collection('users').doc(me.id).onSnapshot(d=>{if(d.exists){me=d.data();users=[me];R();}}));
+    unsubs.push(db.collection('tx').where('user','==',me.id).onSnapshot(s=>{tx=s.docs.map(d=>d.data()).sort((a,b)=>b.at.localeCompare(a.at));R();}));
+  }
+  unsubs.push(db.collection('products').onSnapshot(s=>{products=s.docs.map(d=>d.data()).sort((a,b)=>a.title.localeCompare(b.title));R();}));
+  unsubs.push(db.collection('events').onSnapshot(s=>{events=s.docs.map(d=>d.data()).sort((a,b)=>b.date.localeCompare(a.date));R();}));
+  unsubs.push(db.collection('notes').where('user','==',me.id).onSnapshot(s=>{
+    if(!firstNotes)s.docChanges().forEach(c=>{if(c.type==='added'){const n=c.doc.data();toast(n.text);if('Notification' in window&&Notification.permission==='granted'&&document.hidden)try{new Notification('Tessera Bar Turno A',{body:n.text});}catch{}}});
+    firstNotes=false;notes=s.docs.map(d=>d.data()).sort((a,b)=>b.at.localeCompare(a.at));R();}));
+  if(me.firstPass)setTimeout(()=>account(),500);
+  if(localStorage.getItem('bar-push')==='1')enablePush(true).catch(()=>{});
+  render();
+}
+
+/* ---------- viste ---------- */
+function render(){
+  if(!me)return;
+  const a=document.activeElement;if(a&&a.closest&&a.closest('#content')&&/INPUT|SELECT|TEXTAREA/.test(a.tagName)){dirty=true;return;}
+  dirty=false;
+  const o=op(),unread=notes.filter(n=>!n.read).length;
+  if(!o&&['home','pos','people','products'].includes(page))page='card';
+  const tabs=o?[['home','Panoramica'],['pos','Cassa'],['people','Personale'],['products','Prodotti'],['events','Eventi'],['history','Storico'],['notes','Notifiche'+(unread?' ·'+unread:'')]]:[['card','La mia tessera'],['events','Eventi'],['history','Storico'],['notes','Notifiche'+(unread?' ·'+unread:'')]];
+  $('#app').innerHTML=`<header><b>🚒 Tessera Bar Turno A</b>${isStaff()?`<button class="ghost" data-act="switch">⇄ ${o?'Vista utente':'Vista operatore'}</button>`:''}<button class="ghost" data-act="account">👤 ${esc(me.first)}</button><button class="ghost" data-act="logout">Esci</button></header>
+  <nav>${tabs.map(([id,l])=>`<button class="${page===id?'on':''}" data-act="nav" data-id="${id}">${l}</button>`).join('')}</nav><main id="content"></main>`;
+  ({home,pos,people,products:productsView,events:eventsView,history,card,notes:notesView})[page]();
+}
+function txTable(rows){return rows.length?`<table><thead><tr><th>Collega / operazione</th><th>Data</th><th>Operatore</th><th class="right">Importo</th></tr></thead><tbody>${rows.map(t=>`<tr><td><b>${esc(name(U(t.user)))}</b><br><small class="muted">${esc(t.reason)}</small></td><td>${fdate(t.at)}</td><td>${esc(t.actorName||'')}</td><td class="right ${t.amount>0?'pos':'neg'}"><b>${t.amount>0?'+':'−'} ${euro(Math.abs(t.amount))}</b></td></tr>`).join('')}</tbody></table>`:'<p class="muted">Nessun movimento.</p>';}
+function home(){
+  $('#content').innerHTML=`<h1>Panoramica</h1><div class="two"><div class="panel"><span class="muted">Credito complessivo</span><h2 style="font-size:30px">${euro(users.reduce((s,u)=>s+(u.balance||0),0))}</h2></div><div class="panel"><span class="muted">Personale registrato</span><h2 style="font-size:30px">${users.length}</h2></div></div>
+  <button class="primary" data-act="nav" data-id="pos">Apri la cassa →</button><h2 style="margin-top:24px">Ultimi movimenti</h2><div class="panel">${txTable(tx.slice(0,6))}</div>`;
+}
+function pos(){
+  const u=U(selected),total=Object.entries(cart).reduce((s,[id,q])=>s+(products.find(p=>p.id===id)?.price||0)*q,0);
+  $('#content').innerHTML=`<h1>Cassa</h1><div class="two"><div>
+  <div class="panel"><div class="row" style="justify-content:space-between"><h2>1. Collega</h2><button class="ghost" data-act="scan">▣ Scansiona QR</button></div>
+  <input id="search" placeholder="Cerca nome…"><select id="sel"><option value="">Seleziona…</option>${users.map(x=>`<option value="${x.id}" ${x.id===selected?'selected':''}>${esc(name(x))} · ${euro(x.balance||0)}</option>`).join('')}</select>
+  ${u?`<p><b>${esc(name(u))}</b> — credito <b>${euro(u.balance||0)}</b></p>`:''}</div>
+  <div class="row" style="margin-bottom:12px"><button class="${kind==='debit'?'primary':'ghost'}" data-act="kind" data-id="debit">Addebito</button><button class="${kind==='credit'?'primary':'ghost'}" data-act="kind" data-id="credit">Ricarica</button></div>
+  ${kind==='debit'?`<div class="grid">${products.filter(p=>p.active).map(p=>`<button class="prod" data-act="add" data-id="${p.id}"><span>${p.icon}</span><b>${esc(p.title)}</b><br><small>${euro(p.price)}</small></button>`).join('')}</div>`:`<div class="panel"><p>Importi rapidi</p><div class="row">${[5,10,20,50].map(n=>`<button class="ghost" data-act="quick" data-id="${n}">${n} €</button>`).join('')}</div></div>`}
+  </div><div class="panel"><h2>${kind==='credit'?'Ricarica':'Riepilogo'}</h2>
+  ${kind==='debit'?(Object.entries(cart).map(([id,q])=>{const p=products.find(p=>p.id===id);return `<div class="row" style="justify-content:space-between;padding:6px 0"><span>${esc(p.title)} × ${q}</span><span><button class="ghost" data-act="less" data-id="${id}">−</button> ${euro(p.price*q)}</span></div>`;}).join('')||'<p class="muted">Tocca un prodotto.</p>'):''}
+  <form id="opform"><label>${kind==='credit'?'Importo ricarica (€)':'Importo libero aggiuntivo (€)'}<input id="amount" name="amount" inputmode="decimal" placeholder="0,00"></label>
+  <label>Causale<input name="reason" maxlength="150" placeholder="${kind==='credit'?'Ricarica contanti':'Per importo libero'}"></label>
+  ${kind==='debit'?`<p><b>Totale prodotti: ${euro(total)}</b></p>`:''}<button class="primary full" ${u?'':'disabled'}>Conferma</button></form></div></div>`;
+}
+function people(){
+  $('#content').innerHTML=`<div class="row" style="justify-content:space-between"><h1>Personale (${users.length})</h1><button class="primary" data-act="newuser">+ Nuovo collega</button></div>
+  <input id="filter" placeholder="Cerca…"><div class="panel"><table><thead><tr><th>Collega</th><th>Ruolo</th><th>Credito</th><th></th></tr></thead><tbody>${users.map(u=>`<tr data-p="${esc((name(u)+u.username).toLowerCase())}"><td><b>${esc(name(u))}</b><br><small class="muted">${esc(u.username)}</small></td><td><span class="pill">${{admin:'Admin',operator:'Operatore',user:'Utente'}[u.role]}</span></td><td><b>${euro(u.balance||0)}</b></td><td><button class="ghost" data-act="seluser" data-id="${u.id}">Cassa</button> <button class="ghost" data-act="showqr" data-id="${u.id}">QR</button>${me.role==='admin'&&u.role!=='admin'?` <button class="ghost" data-act="role" data-id="${u.id}">Ruolo</button>`:''}${me.role==='admin'&&u.id!==me.id?` <button class="ghost" data-act="resetpw" data-id="${u.id}">Reset pw</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function productsView(){
+  $('#content').innerHTML=`<div class="row" style="justify-content:space-between"><h1>Prodotti</h1><button class="primary" data-act="newprod">+ Nuovo</button></div><div class="grid">${products.map(p=>`<div class="panel"><span style="font-size:28px">${p.icon}</span><h3 style="margin:6px 0">${esc(p.title)}</h3><h2>${euro(p.price)}</h2><span class="pill">${p.active?'Disponibile':'Disattivato'}</span><div class="row" style="margin-top:10px"><button class="ghost" data-act="editprod" data-id="${p.id}">Modifica</button><button class="ghost" data-act="toggleprod" data-id="${p.id}">${p.active?'Disattiva':'Riattiva'}</button></div></div>`).join('')}</div>`;
+}
+function eventsView(){
+  const o=op(),rows=events.filter(e=>o||e.invitees.includes(me.id));
+  $('#content').innerHTML=`<div class="row" style="justify-content:space-between"><h1>Eventi</h1>${o?'<button class="primary" data-act="newevent">+ Crea evento</button>':''}</div><div class="two">${rows.map(e=>{
+    const part=e.invitees.filter(id=>e.required||(e.responses||{})[id]==='yes').length,paid=Object.keys(e.payments||{}).length,r=(e.responses||{})[me.id];
+    return `<div class="panel"><div class="muted tiny">${e.date.split('-').reverse().join('/')} · ${euro(e.fee)} / persona</div><h2>${esc(e.title)}</h2><span class="pill">${e.required?'Obbligatorio':'Facoltativo'}</span><p class="muted">${esc(e.description||'')}</p><p class="tiny">${part} partecipanti · ${paid} pagati · ${e.invitees.length} invitati</p>
+    ${o?`<button class="ghost full" data-act="eventdetail" data-id="${e.id}">Gestisci partecipanti →</button>`:`<p>${e.required?'Partecipazione obbligatoria':'Risposta: <b>'+(r==='yes'?'Partecipo':r==='no'?'Non partecipo':'Da confermare')+'</b>'} · <b>${(e.payments||{})[me.id]?'Pagato':'Da pagare'}</b></p>${e.required?'':`<div class="row"><button class="primary" data-act="join" data-id="${e.id}">Partecipo</button><button class="ghost" data-act="decline" data-id="${e.id}" ${(e.payments||{})[me.id]?'disabled':''}>Non partecipo</button></div>`}`}</div>`;}).join('')||'<p class="muted">Nessun evento.</p>'}</div>`;
+}
+function history(){
+  const o=op();
+  $('#content').innerHTML=`<h1>Storico</h1><div class="row">${o?`<label style="flex:1">Collega<select id="hu"><option value="">Tutti</option>${users.map(u=>`<option value="${u.id}">${esc(name(u))}</option>`).join('')}</select></label>`:''}<label style="flex:1">Tipo<select id="ht"><option value="">Tutte</option><option value="c">Ricariche</option><option value="d">Addebiti</option></select></label></div><div class="panel" id="hrows">${txTable(tx.filter(t=>o||t.user===me.id))}</div>`;
+}
+function filterHist(){const o=op(),id=$('#hu')?.value,t=$('#ht').value;$('#hrows').innerHTML=txTable(tx.filter(x=>(o?(!id||x.user===id):x.user===me.id)&&(!t||(t==='c'?x.amount>0:x.amount<0))));}
+function qr(u){const q=qrcode(0,'M');q.addData('BAR:'+u.token);q.make();return q.createSvgTag(4,8);}
+function card(){
+  $('#content').innerHTML=`<h1>La tua tessera</h1><div class="two"><div class="card"><div>🚒 TESSERA BAR TURNO A</div><div style="opacity:.75;font-size:11px;margin-top:20px">IL TUO CREDITO</div><h2>${euro(me.balance||0)}</h2><b>${esc(name(me))}</b></div>
+  <div class="panel" style="text-align:center"><div class="qr">${qr(me)}</div><p class="muted tiny">Mostra il QR all'operatore del bar.</p></div></div><h2>I tuoi ultimi movimenti</h2><div class="panel">${txTable(tx.filter(t=>t.user===me.id).slice(0,5))}</div>`;
+}
+function notesView(){
+  $('#content').innerHTML=`<div class="row" style="justify-content:space-between"><h1>Notifiche</h1><button class="ghost" data-act="readall">Segna tutte lette</button></div>
+  <div class="row" style="margin-bottom:12px"><button class="primary" data-act="pushon">Attiva notifiche su questo dispositivo</button><button class="ghost" data-act="pushoff">Disattiva</button></div>
+  <div class="panel">${notes.map(n=>`<div class="note ${n.read?'':'un'}">${esc(n.text)}<br><small class="muted">${fdate(n.at)}</small></div>`).join('')||'<p class="muted">Nessuna notifica.</p>'}</div>`;
+}
+
+/* ---------- notifiche ---------- */
+async function notify(userIds,text,pushBody){
+  const at=new Date().toISOString(),b=db.batch();
+  userIds.forEach(u=>{const r=db.collection('notes').doc();b.set(r,{id:r.id,user:u,text,at,read:false});});
+  await b.commit();
+  try{
+    const tokens=[];
+    for(let i=0;i<userIds.length;i+=10){const s=await db.collection('devices').where('user','in',userIds.slice(i,i+10)).get();s.forEach(d=>tokens.push(d.data().token));}
+    if(tokens.length)fetch(PUSH_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tokens,title:'Tessera Bar Turno A',body:pushBody||'Nuovo aggiornamento. Apri l\'app.'})}).catch(()=>{});
+  }catch{}
+}
+async function enablePush(silent){
+  if(!VAPID_KEY)throw Error('Push non configurate (VAPID_KEY vuota): ricevi gli avvisi quando l\'app è aperta.');
+  if(!firebase.messaging.isSupported())throw Error('Browser non compatibile. Su iPhone installa l\'app nella Home.');
+  if(!silent&&await Notification.requestPermission()!=='granted')throw Error('Consenso non concesso.');
+  if(Notification.permission!=='granted')return;
+  const reg=await navigator.serviceWorker.register('/firebase-messaging-sw.js');await navigator.serviceWorker.ready;
+  const token=await firebase.messaging().getToken({vapidKey:VAPID_KEY,serviceWorkerRegistration:reg});
+  await db.collection('devices').doc(token.slice(-40)).set({user:me.id,token});
+  localStorage.setItem('bar-push','1');localStorage.setItem('bar-push-id',token.slice(-40));
+  firebase.messaging().onMessage(p=>toast((p.data&&p.data.body)||'Nuovo aggiornamento'));
+}
+
+/* ---------- azioni ---------- */
+async function commitTx(userId,amount,reason,extra={}){
+  const u=U(userId),r=db.collection('tx').doc(),fresh=(await db.collection('users').doc(userId).get()).data();
+  if((fresh.balance||0)+amount<0)throw Error('Credito insufficiente.');
+  const b=db.batch();
+  b.update(db.collection('users').doc(userId),{balance:FV.increment(amount)});
+  b.set(r,{id:r.id,user:userId,amount,reason,actor:me.id,actorName:name(me),at:new Date().toISOString(),...extra});
+  await b.commit();
+  const bal=(fresh.balance||0)+amount;
+  await notify([userId],`${amount>0?'Ricarica':'Addebito'} ${euro(Math.abs(amount))} · ${reason}. Saldo: ${euro(bal)}.`,amount>0?'Ricarica effettuata. Apri l\'app per i dettagli.':'Addebito effettuato. Apri l\'app per i dettagli.');
+}
+function account(){
+  modal('Il mio account',`<p><b>${esc(name(me))}</b> · ${esc(me.username)}</p><form id="pwform"><label>Nuova password<input type="password" name="p" required></label><label>Ripeti password<input type="password" name="r" required></label><button class="primary full">Salva password</button></form>`);
+}
+function stopCam(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;clearTimeout(scanT);}
+function resolveQR(v){const u=users.find(u=>'BAR:'+u.token===v.trim());if(!u)throw Error('QR non riconosciuto.');selected=u.id;cart={};page='pos';closeModal();render();toast('Selezionato: '+name(u));}
+async function scan(){
+  modal('Scansiona la tessera',`<video id="cam" autoplay muted playsinline></video><p id="camst" class="muted tiny">Avvio fotocamera…</p><form id="manual"><label>Oppure incolla il codice<input name="c" placeholder="BAR:…" required></label><button class="primary full">Trova</button></form>`);
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});const v=$('#cam');v.srcObject=stream;await v.play();$('#camst').textContent='Inquadra il QR.';
+    const c=document.createElement('canvas'),x=c.getContext('2d',{willReadFrequently:true});
+    (function f(){if(!stream)return;if(v.readyState>=2){c.width=v.videoWidth;c.height=v.videoHeight;x.drawImage(v,0,0);const d=x.getImageData(0,0,c.width,c.height),r=jsQR(d.data,d.width,d.height);if(r){try{resolveQR(r.data);return;}catch(e){$('#camst').textContent=e.message;}}}scanT=setTimeout(f,200);})();
+  }catch(e){const s=$('#camst');if(s)s.textContent='Fotocamera non disponibile: '+e.message;}
+}
+function eventDetail(id){
+  const e=events.find(x=>x.id===id);if(!e)return;const R=e.responses||{},P=e.payments||{};
+  modal(esc(e.title),`<p class="muted">${e.required?'Obbligatorio':'Facoltativo'} · quota ${euro(e.fee)} · ${e.date}. «Contanti» registra l'incasso senza scalare il credito.</p><div style="overflow:auto"><table><thead><tr><th>Collega</th><th>Adesione</th><th>Pagamento</th></tr></thead><tbody>${e.invitees.map(uid=>{const u=U(uid),att=e.required||R[uid]==='yes';return `<tr><td><b>${esc(name(u))}</b><br><small class="muted">${euro(u?.balance||0)}</small></td><td><select data-resp="${e.id}" data-u="${uid}" ${e.required||P[uid]?'disabled':''}><option value="" ${!R[uid]?'selected':''}>In attesa</option><option value="yes" ${att?'selected':''}>Partecipa</option><option value="no" ${R[uid]==='no'?'selected':''}>Non partecipa</option></select></td><td>${P[uid]?`<span class="pos">✓ Pagato</span> <small>${P[uid].method==='credit'?'Credito':'Contanti'}</small>`:`<button class="ghost" data-act="pay" data-id="${e.id}" data-u="${uid}" data-m="credit" ${att?'':'disabled'}>Credito</button> <button class="ghost" data-act="pay" data-id="${e.id}" data-u="${uid}" data-m="cash" ${att?'':'disabled'}>Contanti</button>`}</td></tr>`;}).join('')}</tbody></table></div>`);
+}
+async function respond(id,uid,val){
+  const e=events.find(x=>x.id===id);if(!e.invitees.includes(uid))throw Error('Non invitato.');if((e.payments||{})[uid])throw Error('Quota già pagata.');
+  await db.collection('events').doc(id).update({['responses.'+uid]:val});
+}
+const acts={
+  close:closeModal,nav:id=>{page=id;render();},
+  switch:()=>{mode=mode==='op'?'user':'op';page=op()?'home':'card';render();},
+  logout:()=>{unsubs.forEach(f=>f());unsubs=[];localStorage.removeItem('bar-user');me=null;stopCam();loginView();},
+  account,scan,kind:id=>{kind=id;render();},
+  add:id=>{cart[id]=(cart[id]||0)+1;pos();},less:id=>{if(--cart[id]<=0)delete cart[id];pos();},quick:id=>{$('#amount').value=id;},
+  seluser:id=>{selected=id;cart={};page='pos';render();},
+  showqr:id=>{const u=U(id);modal('Tessera · '+esc(name(u)),`<div class="qr" style="max-width:280px">${qr(u)}</div><p class="muted tiny" style="text-align:center">Codice: BAR:${esc(u.token)}</p>`);},
+  newuser:()=>modal('Nuovo collega',`<form id="newuser"><label>Nome<input name="first" required></label><label>Cognome<input name="last" required></label><label>Password primo accesso<input name="pass" type="password" required></label><label>Ruolo<select name="role"><option value="user">Utente</option><option value="operator">Operatore</option></select></label><p class="muted tiny">Username automatico: nome.cognome</p><button class="primary full">Crea</button></form>`),
+  role:id=>{const u=U(id);modal('Ruolo · '+esc(name(u)),`<form id="roleform" data-id="${id}"><select name="role"><option value="user" ${u.role==='user'?'selected':''}>Utente</option><option value="operator" ${u.role==='operator'?'selected':''}>Operatore</option></select><button class="primary full">Salva</button></form>`);},
+  resetpw:id=>{const u=U(id);modal('Reset password · '+esc(name(u)),`<form id="resetform" data-id="${id}"><label>Nuova password<input name="p" required></label><button class="primary full">Salva</button></form>`);},
+  newprod:()=>prodForm(),editprod:id=>prodForm(id),
+  toggleprod:async id=>{const p=products.find(p=>p.id===id);await db.collection('products').doc(id).update({active:!p.active});},
+  newevent:()=>modal('Nuovo evento',`<form id="eventform"><label>Nome evento<input name="title" required></label><div class="row"><label style="flex:1">Data<input name="date" type="date" required></label><label style="flex:1">Quota (€)<input name="fee" inputmode="decimal" required></label></div><label>Partecipazione<select name="part"><option value="optional">Facoltativa — richiede adesione</option><option value="required">Obbligatoria — tutti partecipano</option></select></label><label>Dettagli<textarea name="description" rows="2"></textarea></label><label><input type="checkbox" id="allinv" checked style="display:inline;width:auto;margin:0 6px 0 0">Invita tutti</label><div style="max-height:160px;overflow:auto;margin:8px 0">${users.map(u=>`<label><input type="checkbox" name="inv" value="${u.id}" checked style="display:inline;width:auto;margin:0 6px 0 0">${esc(name(u))}</label>`).join('')}</div><button class="primary full">Crea evento</button></form>`),
+  eventdetail:eventDetail,
+  join:id=>respond(id,me.id,'yes'),decline:id=>respond(id,me.id,'no'),
+  pay:async(id,_,el)=>{
+    const e=events.find(x=>x.id===id),uid=el.dataset.u,m=el.dataset.m,u=U(uid);
+    if(!(e.required||(e.responses||{})[uid]==='yes'))throw Error('Conferma prima l\'adesione.');if((e.payments||{})[uid])throw Error('Già pagato.');
+    if(!confirm(`Registrare ${euro(e.fee)} per ${name(u)} tramite ${m==='credit'?'credito tessera':'contanti già ricevuti'}?`))return;
+    if(m==='credit')await commitTx(uid,-e.fee,'Quota evento: '+e.title,{event:id});else await notify([uid],`Pagamento in contanti registrato: ${e.title} · ${euro(e.fee)}.`,'Pagamento registrato.');
+    await db.collection('events').doc(id).update({['payments.'+uid]:{method:m,actor:me.id,at:new Date().toISOString()}});
+    setTimeout(()=>eventDetail(id),400);toast('Pagamento registrato');
+  },
+  readall:async()=>{const b=db.batch();notes.filter(n=>!n.read).forEach(n=>b.update(db.collection('notes').doc(n.id),{read:true}));await b.commit();},
+  pushon:async()=>{await enablePush(false);toast('Notifiche attivate su questo dispositivo.');},
+  pushoff:async()=>{const id=localStorage.getItem('bar-push-id');if(id)await db.collection('devices').doc(id).delete();localStorage.removeItem('bar-push');localStorage.removeItem('bar-push-id');toast('Notifiche disattivate.');}
+};
+function prodForm(id){
+  const p=products.find(p=>p.id===id);
+  modal(p?'Modifica prodotto':'Nuovo prodotto',`<form id="prodform" data-id="${id||''}"><label>Nome<input name="title" required value="${esc(p?.title||'')}"></label><label>Prezzo (€)<input name="price" required inputmode="decimal" value="${p?(p.price/100).toFixed(2):''}"></label><label>Icona<select name="icon">${ICONS.map(i=>`<option ${p?.icon===i?'selected':''}>${i}</option>`).join('')}</select></label><button class="primary full">Salva</button></form>`);
+}
+
+/* ---------- eventi DOM ---------- */
+let busy=false;
+async function run(fn){if(busy)return;busy=true;try{await fn();}catch(e){toast(e.message);}finally{busy=false;}}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(b)run(()=>acts[b.dataset.act]?.(b.dataset.id,null,b));});
+document.addEventListener('input',e=>{
+  if(e.target.id==='search'){const q=e.target.value.toLowerCase();[...$('#sel').options].forEach(o=>o.hidden=o.value&&!o.text.toLowerCase().includes(q));}
+  if(e.target.id==='filter'){const q=e.target.value.toLowerCase();document.querySelectorAll('[data-p]').forEach(r=>r.hidden=!r.dataset.p.includes(q));}
+});
+document.addEventListener('focusout',()=>{setTimeout(()=>{if(dirty)render();},150);});
+document.addEventListener('change',e=>run(async()=>{
+  const t=e.target;
+  if(t.id==='sel'){selected=t.value;cart={};pos();}
+  if(t.id==='hu'||t.id==='ht')filterHist();
+  if(t.id==='allinv')document.querySelectorAll('[name="inv"]').forEach(c=>c.checked=t.checked);
+  if(t.dataset.resp){await respond(t.dataset.resp,t.dataset.u,t.value);setTimeout(()=>eventDetail(t.dataset.resp),400);}
+}));
+document.addEventListener('submit',ev=>{
+  ev.preventDefault();const f=ev.target,d=Object.fromEntries(new FormData(f));
+  run(async()=>{switch(f.id){
+    case 'login':{const un=d.u.trim().toLowerCase(),doc=await db.collection('users').doc(un).get();
+      if(!doc.exists||doc.data().pass!==await sha(d.p))throw Error('Credenziali non corrette.');
+      localStorage.setItem('bar-user',doc.id);session(doc.data());
+      if(un==='admin'&&d.p==='admin'){me.firstPass=true;setTimeout(()=>{toast('Cambia la password iniziale!');account();},600);}
+      if('Notification' in window&&Notification.permission==='default')Notification.requestPermission();break;}
+    case 'pwform':if(d.p!==d.r)throw Error('Le password non coincidono.');await db.collection('users').doc(me.id).update({pass:await sha(d.p)});closeModal();toast('Password aggiornata');break;
+    case 'resetform':await db.collection('users').doc(f.dataset.id).update({pass:await sha(d.p)});closeModal();toast('Password reimpostata');break;
+    case 'newuser':{const base=slug(d.first)+'.'+slug(d.last);if(base==='.'||!slug(d.first)||!slug(d.last))throw Error('Nome non valido.');let un=base,n=2;while((await db.collection('users').doc(un).get()).exists)un=base+n++;
+      await db.collection('users').doc(un).set({id:un,username:un,first:d.first.trim(),last:d.last.trim(),role:d.role,pass:await sha(d.pass),balance:0,token:rnd(),createdAt:new Date().toISOString()});closeModal();toast('Creato: '+un);break;}
+    case 'roleform':await db.collection('users').doc(f.dataset.id).update({role:d.role});closeModal();break;
+    case 'prodform':{const price=money(d.price),id=f.dataset.id;if(id)await db.collection('products').doc(id).update({title:d.title.trim(),price,icon:d.icon});else{const r=db.collection('products').doc();await r.set({id:r.id,title:d.title.trim(),price,icon:d.icon,active:true});}closeModal();break;}
+    case 'opform':{
+      if(!selected)throw Error('Seleziona un collega.');
+      if(kind==='credit'){await commitTx(selected,money(d.amount),d.reason.trim()||'Ricarica contanti');}
+      else{let total=0;const lines=[];for(const [id,q] of Object.entries(cart)){const p=products.find(p=>p.id===id);total+=p.price*q;lines.push(q+' × '+p.title);}
+        if(d.amount.trim()){if(!d.reason.trim())throw Error('Inserisci la causale.');total+=money(d.amount);lines.push(d.reason.trim());}
+        if(!total)throw Error('Carrello vuoto.');await commitTx(selected,-total,lines.join(' · '));}
+      cart={};toast('Operazione registrata.');break;}
+    case 'eventform':{const inv=new FormData(f).getAll('inv');if(!inv.length)throw Error('Seleziona almeno un invitato.');
+      const r=db.collection('events').doc(),req=d.part==='required';
+      await r.set({id:r.id,title:d.title.trim(),date:d.date,fee:money(d.fee),description:(d.description||'').trim(),required:req,invitees:inv,responses:{},payments:{},createdAt:new Date().toISOString(),actor:me.id});
+      await notify(inv,`Nuovo evento ${req?'obbligatorio':'facoltativo'}: ${d.title.trim()}. ${req?'Adesione non richiesta.':'Conferma la tua adesione nella sezione Eventi.'}`,'È disponibile un nuovo evento.');
+      closeModal();toast('Evento creato');break;}
+    case 'manual':resolveQR(d.c);break;
+  }});
+});
+$('#modal').addEventListener('close',stopCam);
+start();
+</script></body></html>
