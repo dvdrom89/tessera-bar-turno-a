@@ -12,23 +12,40 @@ async function accessToken(sa) {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=' + head + '.' + body + '.' + sig
   });
-  return (await r.json()).access_token;
+  const result = await r.json();
+  if (!r.ok || !result.access_token) throw Error('Autenticazione FCM non riuscita.');
+  return result.access_token;
 }
 
 exports.handler = async (event) => {
-  const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type' };
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: cors };
+  if (event.httpMethod !== 'POST') return { statusCode: 405, headers: { Allow: 'POST' } };
+  let payload;
+  try { payload = JSON.parse(event.body || '{}'); }
+  catch { return { statusCode: 400, body: 'Richiesta non valida.' }; }
+  const { tokens, title, body } = payload || {};
+  if (!Array.isArray(tokens) || !tokens.length || tokens.length > 300 ||
+      tokens.some(token => typeof token !== 'string' || !token || token.length > 4096)) {
+    return { statusCode: 400, body: 'Destinatari non validi.' };
+  }
   try {
-    const { tokens = [], title, body } = JSON.parse(event.body || '{}');
     const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
     const at = await accessToken(sa);
     const url = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
-    await Promise.all(tokens.slice(0, 300).map(token => fetch(url, {
-      method: 'POST', headers: { Authorization: 'Bearer ' + at, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: { token, data: { title: String(title || 'Tessera Bar Turno A'), body: String(body || '') } } })
-    })));
-    return { statusCode: 200, headers: cors, body: JSON.stringify({ ok: true }) };
-  } catch (e) {
-    return { statusCode: 500, headers: cors, body: JSON.stringify({ error: e.message }) };
+    const deliveries = await Promise.allSettled([...new Set(tokens)].map(async token => {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + at, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: { token, data: {
+          title: String(title || 'Tessera Bar Turno A').slice(0, 100),
+          body: String(body || '').slice(0, 300)
+        } } })
+      });
+      if (!response.ok) throw Error('FCM ha rifiutato il messaggio.');
+    }));
+    const sent = deliveries.filter(result => result.status === 'fulfilled').length;
+    const failed = deliveries.length - sent;
+    return { statusCode: failed ? 502 : 200, body: JSON.stringify({ sent, failed }) };
+  } catch {
+    return { statusCode: 502, body: JSON.stringify({ error: 'Invio FCM non riuscito.' }) };
   }
 };

@@ -31,6 +31,9 @@ dialog{border:0;border-radius:14px;max-width:700px;width:calc(100% - 24px);paddi
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#202d38;color:#fff;padding:12px 20px;border-radius:10px;z-index:99999;display:none;max-width:90vw}
 .login{max-width:380px;margin:12vh auto;background:#fff;padding:28px;border-radius:16px;border:1px solid var(--line)}
 video{width:100%;max-height:260px;background:#202a35;border-radius:8px}
+.home-art{width:88px;height:88px;border-radius:18px;flex:none}
+.hero{gap:16px}.total{font-size:24px;margin:8px 0}.summary{border:2px solid var(--red)}
+.person-list{display:grid;gap:8px;max-height:45vh;overflow:auto}.person-list button{text-align:left}
 </style></head>
 <body>
 <div id="app"><p style="text-align:center;margin-top:30vh">Caricamento…</p></div>
@@ -55,7 +58,7 @@ const PUSH_URL  = "/.netlify/functions/notify"; // funzione Netlify per le push
 /* ========================================================================= */
 
 firebase.initializeApp(FIREBASE_CONFIG);
-const db = firebase.firestore(), FV = firebase.firestore.FieldValue;
+const db = firebase.firestore();
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const euro = n => (n/100).toLocaleString('it-IT',{style:'currency',currency:'EUR'});
@@ -63,12 +66,13 @@ const fdate = s => new Date(s).toLocaleString('it-IT',{dateStyle:'short',timeSty
 const name = u => u ? u.first+' '+u.last : '—';
 const rnd = () => Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b=>b.toString(16).padStart(2,'0')).join('');
 async function sha(s){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s)))).map(b=>b.toString(16).padStart(2,'0')).join('');}
-function money(v){if(!/^\d+([.,]\d{1,2})?$/.test(String(v).trim()))throw Error('Importo non valido (es. 1,50)');const n=Math.round(Number(String(v).replace(',','.'))*100);if(n<=0)throw Error('Importo non valido');return n;}
+function money(v){if(!/^\d+([.,]\d{1,2})?$/.test(String(v).trim()))throw Error('Importo non valido (es. 1,50)');const n=Math.round(Number(String(v).replace(',','.'))*100);if(!Number.isSafeInteger(n)||n<=0)throw Error('Importo non valido');return n;}
 function slug(v){return v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');}
 function toast(s){const t=$('#toast');t.textContent=s;t.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>t.style.display='none',4000);}
-function modal(title,body){$('#modal').innerHTML=`<div class="row" style="justify-content:space-between"><h2>${title}</h2><button class="ghost" data-act="close">✕</button></div>${body}`;$('#modal').showModal();}
+function modal(title,body){$('#modal').innerHTML=`<div class="row" style="justify-content:space-between"><h2>${title}</h2><button class="ghost" data-act="close">✕</button></div>${body}`;if(!$('#modal').open)$('#modal').showModal();}
 function closeModal(){stopCam();$('#modal').close();}
 
+let pending=null, backPage='home', draft={}, unsubscribePush;
 let me=null,page='home',mode='op',users=[],products=[],events=[],tx=[],notes=[],selected='',cart={},kind='debit',unsubs=[],firstNotes=true,stream=null,scanT=null,dirty=false;
 const isStaff=()=>me&&me.role!=='user';
 const op=()=>isStaff()&&mode==='op';
@@ -82,8 +86,7 @@ async function start(){
     if(!a.exists) await db.collection('users').doc('admin').set({id:'admin',username:'admin',first:'Admin',last:'Turno A',role:'admin',pass:await sha('admin'),balance:0,token:rnd(),createdAt:new Date().toISOString()});
     const ps=await db.collection('products').limit(1).get();
     if(ps.empty) for(const [title,price,icon] of [['Caffè',50,'☕'],['Colazione',150,'🥐'],['Tavola calda',200,'🥪'],['Mezza colazione',100,'🥐'],['Mezza tavola calda',100,'🥪'],['Aperitivo',150,'🍹'],['Gelato',100,'🍦']]){const r=db.collection('products').doc();await r.set({id:r.id,title,price,icon,active:true});}
-    const id=localStorage.getItem('bar-user');
-    if(id){const d=await db.collection('users').doc(id).get();if(d.exists)return session(d.data());}
+    localStorage.removeItem('bar-user');
     loginView();
   }catch(e){$('#app').innerHTML=`<div class="login"><h2>Errore di collegamento</h2><p class="muted">${esc(e.message)}</p><p class="tiny">Controlla la configurazione Firebase in cima a index.html e che Firestore sia attivo con regole aperte.</p></div>`;}
 }
@@ -104,10 +107,9 @@ function session(u){
   unsubs.push(db.collection('products').onSnapshot(s=>{products=s.docs.map(d=>d.data()).sort((a,b)=>a.title.localeCompare(b.title));R();}));
   unsubs.push(db.collection('events').onSnapshot(s=>{events=s.docs.map(d=>d.data()).sort((a,b)=>b.date.localeCompare(a.date));R();}));
   unsubs.push(db.collection('notes').where('user','==',me.id).onSnapshot(s=>{
-    if(!firstNotes)s.docChanges().forEach(c=>{if(c.type==='added'){const n=c.doc.data();toast(n.text);if('Notification' in window&&Notification.permission==='granted'&&document.hidden)try{new Notification('Tessera Bar Turno A',{body:n.text});}catch{}}});
+    if(!firstNotes&&!pushActive())s.docChanges().forEach(c=>{if(c.type==='added')toast(c.doc.data().text);});
     firstNotes=false;notes=s.docs.map(d=>d.data()).sort((a,b)=>b.at.localeCompare(a.at));R();}));
-  if(me.firstPass)setTimeout(()=>account(),500);
-  if(localStorage.getItem('bar-push')==='1')enablePush(true).catch(()=>{});
+  if(pushActive()||localStorage.getItem('bar-push')==='1')enablePush(true).then(render).catch(()=>{localStorage.removeItem('bar-push-user');render();});
   render();
 }
 
@@ -118,29 +120,49 @@ function render(){
   dirty=false;
   const o=op(),unread=notes.filter(n=>!n.read).length;
   if(!o&&['home','pos','people','products'].includes(page))page='card';
-  const tabs=o?[['home','Panoramica'],['pos','Cassa'],['people','Personale'],['products','Prodotti'],['events','Eventi'],['history','Storico'],['notes','Notifiche'+(unread?' ·'+unread:'')]]:[['card','La mia tessera'],['events','Eventi'],['history','Storico'],['notes','Notifiche'+(unread?' ·'+unread:'')]];
+  const tabs=o?[['home','Home'],['people','Personale'],['products','Prodotti'],['events','Eventi'],['history','Storico'],['notes','Notifiche'+(unread?' ·'+unread:'')]]:[['card','La mia tessera'],['events','Eventi'],['history','Storico'],['notes','Notifiche'+(unread?' ·'+unread:'')]];
   $('#app').innerHTML=`<header><b>🚒 Tessera Bar Turno A</b>${isStaff()?`<button class="ghost" data-act="switch">⇄ ${o?'Vista utente':'Vista operatore'}</button>`:''}<button class="ghost" data-act="account">👤 ${esc(me.first)}</button><button class="ghost" data-act="logout">Esci</button></header>
   <nav>${tabs.map(([id,l])=>`<button class="${page===id?'on':''}" data-act="nav" data-id="${id}">${l}</button>`).join('')}</nav><main id="content"></main>`;
   ({home,pos,people,products:productsView,events:eventsView,history,card,notes:notesView})[page]();
 }
 function txTable(rows){return rows.length?`<table><thead><tr><th>Collega / operazione</th><th>Data</th><th>Operatore</th><th class="right">Importo</th></tr></thead><tbody>${rows.map(t=>`<tr><td><b>${esc(name(U(t.user)))}</b><br><small class="muted">${esc(t.reason)}</small></td><td>${fdate(t.at)}</td><td>${esc(t.actorName||'')}</td><td class="right ${t.amount>0?'pos':'neg'}"><b>${t.amount>0?'+':'−'} ${euro(Math.abs(t.amount))}</b></td></tr>`).join('')}</tbody></table>`:'<p class="muted">Nessun movimento.</p>';}
+function pushActive(){
+  return typeof Notification!=='undefined'&&Notification.permission==='granted'&&localStorage.getItem('bar-push-user')===me?.id;
+}
+function homeBanner(){
+  return `<div class="panel row hero"><img class="home-art" src="/pompieri-bar.png" alt=""><div><h1>Tessera Bar Turno A</h1><p class="muted">Ciao, ${esc(me.first)}</p></div></div>
+  ${pushActive()?'':'<div class="panel"><button class="primary" data-act="pushon">Attiva notifiche push</button></div>'}`;
+}
 function home(){
-  $('#content').innerHTML=`<h1>Panoramica</h1><div class="two"><div class="panel"><span class="muted">Credito complessivo</span><h2 style="font-size:30px">${euro(users.reduce((s,u)=>s+(u.balance||0),0))}</h2></div><div class="panel"><span class="muted">Personale registrato</span><h2 style="font-size:30px">${users.length}</h2></div></div>
-  <button class="primary" data-act="nav" data-id="pos">Apri la cassa →</button><h2 style="margin-top:24px">Ultimi movimenti</h2><div class="panel">${txTable(tx.slice(0,6))}</div>`;
+  $('#content').innerHTML=homeBanner()+`<div class="panel row"><button class="primary" data-act="scan">▣ Scansiona tessera</button><button class="ghost" data-act="findperson">Cerca persona</button></div>
+  <h2>Ultimi movimenti</h2><div class="panel">${txTable(tx.slice(0,6))}</div>`;
+}
+function findPerson(){
+  modal('Cerca persona',`<label>Nome o cognome<input id="person-search" autocomplete="off"></label>
+  <div class="person-list">${users.map(u=>`<button class="ghost" data-act="selectperson" data-id="${esc(u.id)}" data-person="${esc(slug(name(u)+u.username))}">${esc(name(u))}</button>`).join('')}</div>
+  <p id="no-person" hidden>Nessuna persona trovata.</p>`);
+}
+function openPerson(id,origin){
+  if(!U(id))throw Error('Collega non trovato.');
+  selected=id; backPage=origin; cart={}; draft={}; kind=''; pending=null;
+  closeModal(); page='pos'; render();
 }
 function pos(){
-  const u=U(selected),total=Object.entries(cart).reduce((s,[id,q])=>s+(products.find(p=>p.id===id)?.price||0)*q,0);
-  $('#content').innerHTML=`<h1>Cassa</h1><div class="two"><div>
-  <div class="panel"><div class="row" style="justify-content:space-between"><h2>1. Collega</h2><button class="ghost" data-act="scan">▣ Scansiona QR</button></div>
-  <input id="search" placeholder="Cerca nome…"><select id="sel"><option value="">Seleziona…</option>${users.map(x=>`<option value="${x.id}" ${x.id===selected?'selected':''}>${esc(name(x))} · ${euro(x.balance||0)}</option>`).join('')}</select>
-  ${u?`<p><b>${esc(name(u))}</b> — credito <b>${euro(u.balance||0)}</b></p>`:''}</div>
-  <div class="row" style="margin-bottom:12px"><button class="${kind==='debit'?'primary':'ghost'}" data-act="kind" data-id="debit">Addebito</button><button class="${kind==='credit'?'primary':'ghost'}" data-act="kind" data-id="credit">Ricarica</button></div>
-  ${kind==='debit'?`<div class="grid">${products.filter(p=>p.active).map(p=>`<button class="prod" data-act="add" data-id="${p.id}"><span>${p.icon}</span><b>${esc(p.title)}</b><br><small>${euro(p.price)}</small></button>`).join('')}</div>`:`<div class="panel"><p>Importi rapidi</p><div class="row">${[5,10,20,50].map(n=>`<button class="ghost" data-act="quick" data-id="${n}">${n} €</button>`).join('')}</div></div>`}
-  </div><div class="panel"><h2>${kind==='credit'?'Ricarica':'Riepilogo'}</h2>
-  ${kind==='debit'?(Object.entries(cart).map(([id,q])=>{const p=products.find(p=>p.id===id);return `<div class="row" style="justify-content:space-between;padding:6px 0"><span>${esc(p.title)} × ${q}</span><span><button class="ghost" data-act="less" data-id="${id}">−</button> ${euro(p.price*q)}</span></div>`;}).join('')||'<p class="muted">Tocca un prodotto.</p>'):''}
-  <form id="opform"><label>${kind==='credit'?'Importo ricarica (€)':'Importo libero aggiuntivo (€)'}<input id="amount" name="amount" inputmode="decimal" placeholder="0,00"></label>
-  <label>Causale<input name="reason" maxlength="150" placeholder="${kind==='credit'?'Ricarica contanti':'Per importo libero'}"></label>
-  ${kind==='debit'?`<p><b>Totale prodotti: ${euro(total)}</b></p>`:''}<button class="primary full" ${u?'':'disabled'}>Conferma</button></form></div></div>`;
+  const u=U(selected);
+  if(!u){page='home';home();return;}
+  const total=Object.entries(cart).reduce((sum,[id,q])=>sum+(products.find(p=>p.id===id)?.price||0)*q,0);
+  $('#content').innerHTML=`<button class="ghost" data-act="backperson">← Indietro</button>
+    <div class="panel" style="margin-top:12px"><h1>${esc(name(u))}</h1><p class="total ${u.balance<0?'neg':''}">Saldo <b>${euro(u.balance||0)}</b></p>
+    <div class="row"><button class="${kind==='debit'?'primary':'ghost'}" data-act="kind" data-id="debit">Incassa · addebita</button>
+    <button class="${kind==='credit'?'primary':'ghost'}" data-act="kind" data-id="credit">Accredita</button></div></div>
+    ${kind?`<div class="two"><div>${kind==='debit'?`<div class="grid">${products.filter(p=>p.active).map(p=>`<button class="prod" data-act="add" data-id="${p.id}"><span>${esc(p.icon)}</span><b>${esc(p.title)}</b><br><small>${euro(p.price)}</small></button>`).join('')}</div>`:
+    `<div class="panel"><h2>Importi rapidi</h2><div class="row">${[5,10,20,50].map(n=>`<button class="ghost" data-act="quick" data-id="${n}">${n} €</button>`).join('')}</div></div>`}</div>
+    <form id="opform" class="panel summary"><h2>${kind==='debit'?'Carrello':'Accredito'}</h2>
+    ${kind==='debit'?Object.entries(cart).map(([id,q])=>{const p=products.find(p=>p.id===id);return p?`<p class="row">${esc(p.title)} × ${q} · ${euro(p.price*q)} <button type="button" class="ghost" data-act="less" data-id="${id}">−</button></p>`:'';}).join(''):''}
+    <label>${kind==='credit'?'Importo (€)':'Importo libero aggiuntivo (€)'}<input id="amount" name="amount" inputmode="decimal" value="${esc(draft.amount)}" placeholder="0,00"></label>
+    <label>Causale<input name="reason" maxlength="150" value="${esc(draft.reason)}"></label>
+    ${kind==='debit'?`<p class="total">Totale prodotti <b>${euro(total)}</b></p>`:''}
+    <button class="primary full">Rivedi ${kind==='debit'?'addebito':'accredito'}</button></form></div>`:''}`;
 }
 function people(){
   $('#content').innerHTML=`<div class="row" style="justify-content:space-between"><h1>Personale (${users.length})</h1><button class="primary" data-act="newuser">+ Nuovo collega</button></div>
@@ -163,12 +185,12 @@ function history(){
 function filterHist(){const o=op(),id=$('#hu')?.value,t=$('#ht').value;$('#hrows').innerHTML=txTable(tx.filter(x=>(o?(!id||x.user===id):x.user===me.id)&&(!t||(t==='c'?x.amount>0:x.amount<0))));}
 function qr(u){const q=qrcode(0,'M');q.addData('BAR:'+u.token);q.make();return q.createSvgTag(4,8);}
 function card(){
-  $('#content').innerHTML=`<h1>La tua tessera</h1><div class="two"><div class="card"><div>🚒 TESSERA BAR TURNO A</div><div style="opacity:.75;font-size:11px;margin-top:20px">IL TUO CREDITO</div><h2>${euro(me.balance||0)}</h2><b>${esc(name(me))}</b></div>
+  $('#content').innerHTML=`${homeBanner()}<div class="two"><div class="card"><div>🚒 TESSERA BAR TURNO A</div><div style="opacity:.75;font-size:11px;margin-top:20px">IL TUO CREDITO</div><h2>${euro(me.balance||0)}</h2><b>${esc(name(me))}</b></div>
   <div class="panel" style="text-align:center"><div class="qr">${qr(me)}</div><p class="muted tiny">Mostra il QR all'operatore del bar.</p></div></div><h2>I tuoi ultimi movimenti</h2><div class="panel">${txTable(tx.filter(t=>t.user===me.id).slice(0,5))}</div>`;
 }
 function notesView(){
   $('#content').innerHTML=`<div class="row" style="justify-content:space-between"><h1>Notifiche</h1><button class="ghost" data-act="readall">Segna tutte lette</button></div>
-  <div class="row" style="margin-bottom:12px"><button class="primary" data-act="pushon">Attiva notifiche su questo dispositivo</button><button class="ghost" data-act="pushoff">Disattiva</button></div>
+  <div class="row" style="margin-bottom:12px">${pushActive()?'<button class="ghost" data-act="pushoff">Disattiva notifiche push</button>':''}</div>
   <div class="panel">${notes.map(n=>`<div class="note ${n.read?'':'un'}">${esc(n.text)}<br><small class="muted">${fdate(n.at)}</small></div>`).join('')||'<p class="muted">Nessuna notifica.</p>'}</div>`;
 }
 
@@ -177,51 +199,71 @@ async function notify(userIds,text,pushBody){
   const at=new Date().toISOString(),b=db.batch();
   userIds.forEach(u=>{const r=db.collection('notes').doc();b.set(r,{id:r.id,user:u,text,at,read:false});});
   await b.commit();
-  try{
-    const tokens=[];
-    for(let i=0;i<userIds.length;i+=10){const s=await db.collection('devices').where('user','in',userIds.slice(i,i+10)).get();s.forEach(d=>tokens.push(d.data().token));}
-    if(tokens.length)fetch(PUSH_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tokens,title:'Tessera Bar Turno A',body:pushBody||'Nuovo aggiornamento. Apri l\'app.'})}).catch(()=>{});
-  }catch{}
+  const tokens=[];
+  for(let i=0;i<userIds.length;i+=10){const s=await db.collection('devices').where('user','in',userIds.slice(i,i+10)).get();s.forEach(d=>tokens.push(d.data().token));}
+  for(let i=0;i<tokens.length;i+=300){
+    const response=await fetch(PUSH_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tokens:tokens.slice(i,i+300),title:'Tessera Bar Turno A',body:pushBody||"Nuovo aggiornamento. Apri l'app."})});
+    if(!response.ok)throw Error('Invio push non riuscito.');
+  }
 }
+
 async function enablePush(silent){
   if(!VAPID_KEY)throw Error('Push non configurate (VAPID_KEY vuota): ricevi gli avvisi quando l\'app è aperta.');
-  if(!firebase.messaging.isSupported())throw Error('Browser non compatibile. Su iPhone installa l\'app nella Home.');
+  if(!await firebase.messaging.isSupported())throw Error('Browser non compatibile. Su iPhone installa l\'app nella Home.');
   if(!silent&&await Notification.requestPermission()!=='granted')throw Error('Consenso non concesso.');
-  if(Notification.permission!=='granted')return;
+  if(Notification.permission!=='granted')throw Error('Consenti le notifiche nelle impostazioni del browser.');
+  const userId=me.id;
   const reg=await navigator.serviceWorker.register('/firebase-messaging-sw.js');await navigator.serviceWorker.ready;
   const token=await firebase.messaging().getToken({vapidKey:VAPID_KEY,serviceWorkerRegistration:reg});
-  await db.collection('devices').doc(token.slice(-40)).set({user:me.id,token});
-  localStorage.setItem('bar-push','1');localStorage.setItem('bar-push-id',token.slice(-40));
-  firebase.messaging().onMessage(p=>toast((p.data&&p.data.body)||'Nuovo aggiornamento'));
+  if(me?.id!==userId)throw Error('Sessione cambiata.');
+  await db.collection('devices').doc(token.slice(-40)).set({user:userId,token});
+  localStorage.setItem('bar-push-user',me.id);localStorage.removeItem('bar-push');localStorage.setItem('bar-push-id',token.slice(-40));
+  unsubscribePush?.();unsubscribePush=firebase.messaging().onMessage(p=>toast((p.data&&p.data.body)||'Nuovo aggiornamento'));
 }
 
 /* ---------- azioni ---------- */
-async function commitTx(userId,amount,reason,extra={}){
-  const u=U(userId),r=db.collection('tx').doc(),fresh=(await db.collection('users').doc(userId).get()).data();
-  if((fresh.balance||0)+amount<0)throw Error('Credito insufficiente.');
-  const b=db.batch();
-  b.update(db.collection('users').doc(userId),{balance:FV.increment(amount)});
-  b.set(r,{id:r.id,user:userId,amount,reason,actor:me.id,actorName:name(me),at:new Date().toISOString(),...extra});
-  await b.commit();
-  const bal=(fresh.balance||0)+amount;
-  await notify([userId],`${amount>0?'Ricarica':'Addebito'} ${euro(Math.abs(amount))} · ${reason}. Saldo: ${euro(bal)}.`,amount>0?'Ricarica effettuata. Apri l\'app per i dettagli.':'Addebito effettuato. Apri l\'app per i dettagli.');
+async function commitTx(userId,amount,reason,eventId=null){
+  const userRef=db.collection('users').doc(userId), movement=db.collection('tx').doc();
+  const eventRef=eventId?db.collection('events').doc(eventId):null;
+  const actor=me;
+  const at=new Date().toISOString();
+  const balance=await db.runTransaction(async t=>{
+    const user=await t.get(userRef);
+    if(!user.exists)throw Error('Collega non trovato.');
+    if(eventRef){
+      const doc=await t.get(eventRef),event=doc.data();
+      if(!event?.invitees.includes(userId)||!(event.required||event.responses?.[userId]==='yes'))throw Error('Adesione mancante.');
+      if(event.payments?.[userId])throw Error('Quota già pagata.');
+      if(amount!==0&&amount!==-event.fee)throw Error('Quota cambiata. Riapri l’evento.');
+      t.update(eventRef,{['payments.'+userId]:{method:amount?'credit':'cash',actor:actor.id,at}});
+    }
+    const next=(user.data().balance||0)+amount;
+    if(amount){
+      t.update(userRef,{balance:next});
+      t.set(movement,{id:movement.id,user:userId,amount,reason,actor:actor.id,actorName:name(actor),at,...(eventId?{event:eventId}:{})});
+    }
+    return next;
+  });
+  const label=amount>0?'Accredito':amount<0?'Addebito':'Pagamento in contanti';
+  return notify([userId],`${label}${amount?' '+euro(Math.abs(amount)):''} · ${reason}. Saldo: ${euro(balance)}.`,`${label} registrato. Apri l’app per i dettagli.`).then(()=>true,()=>false);
 }
 function account(){
   modal('Il mio account',`<p><b>${esc(name(me))}</b> · ${esc(me.username)}</p><form id="pwform"><label>Nuova password<input type="password" name="p" required></label><label>Ripeti password<input type="password" name="r" required></label><button class="primary full">Salva password</button></form>`);
 }
 function stopCam(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;clearTimeout(scanT);}
-function resolveQR(v){const u=users.find(u=>'BAR:'+u.token===v.trim());if(!u)throw Error('QR non riconosciuto.');selected=u.id;cart={};page='pos';closeModal();render();toast('Selezionato: '+name(u));}
+function resolveQR(v){const u=users.find(u=>'BAR:'+u.token===v.trim());if(!u)throw Error('QR non riconosciuto.');openPerson(u.id,'home');}
 async function scan(){
   modal('Scansiona la tessera',`<video id="cam" autoplay muted playsinline></video><p id="camst" class="muted tiny">Avvio fotocamera…</p><form id="manual"><label>Oppure incolla il codice<input name="c" placeholder="BAR:…" required></label><button class="primary full">Trova</button></form>`);
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});const v=$('#cam');v.srcObject=stream;await v.play();$('#camst').textContent='Inquadra il QR.';
+    const v=$('#cam'), camera=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});if(!v.isConnected||!$('#modal').open){camera.getTracks().forEach(t=>t.stop());return;}stream=camera;v.srcObject=stream;await v.play();$('#camst').textContent='Inquadra il QR.';
     const c=document.createElement('canvas'),x=c.getContext('2d',{willReadFrequently:true});
     (function f(){if(!stream)return;if(v.readyState>=2){c.width=v.videoWidth;c.height=v.videoHeight;x.drawImage(v,0,0);const d=x.getImageData(0,0,c.width,c.height),r=jsQR(d.data,d.width,d.height);if(r){try{resolveQR(r.data);return;}catch(e){$('#camst').textContent=e.message;}}}scanT=setTimeout(f,200);})();
   }catch(e){const s=$('#camst');if(s)s.textContent='Fotocamera non disponibile: '+e.message;}
 }
 function eventDetail(id){
   const e=events.find(x=>x.id===id);if(!e)return;const R=e.responses||{},P=e.payments||{};
-  modal(esc(e.title),`<p class="muted">${e.required?'Obbligatorio':'Facoltativo'} · quota ${euro(e.fee)} · ${e.date}. «Contanti» registra l'incasso senza scalare il credito.</p><div style="overflow:auto"><table><thead><tr><th>Collega</th><th>Adesione</th><th>Pagamento</th></tr></thead><tbody>${e.invitees.map(uid=>{const u=U(uid),att=e.required||R[uid]==='yes';return `<tr><td><b>${esc(name(u))}</b><br><small class="muted">${euro(u?.balance||0)}</small></td><td><select data-resp="${e.id}" data-u="${uid}" ${e.required||P[uid]?'disabled':''}><option value="" ${!R[uid]?'selected':''}>In attesa</option><option value="yes" ${att?'selected':''}>Partecipa</option><option value="no" ${R[uid]==='no'?'selected':''}>Non partecipa</option></select></td><td>${P[uid]?`<span class="pos">✓ Pagato</span> <small>${P[uid].method==='credit'?'Credito':'Contanti'}</small>`:`<button class="ghost" data-act="pay" data-id="${e.id}" data-u="${uid}" data-m="credit" ${att?'':'disabled'}>Credito</button> <button class="ghost" data-act="pay" data-id="${e.id}" data-u="${uid}" data-m="cash" ${att?'':'disabled'}>Contanti</button>`}</td></tr>`;}).join('')}</tbody></table></div>`);
+  modal(esc(e.title),`<p class="muted">${e.required?'Obbligatorio':'Facoltativo'} · quota ${euro(e.fee)} · ${e.date}. «Contanti» registra l'incasso senza scalare il credito.</p>
+  <button class="primary" data-act="paybulk" data-id="${id}">Addebita quote selezionate</button><div style="overflow:auto"><table><thead><tr><th>Collega</th><th>Adesione</th><th>Pagamento</th></tr></thead><tbody>${e.invitees.map(uid=>{const u=U(uid),att=e.required||R[uid]==='yes';return `<tr><td>${att&&!P[uid]?`<label><input style="display:inline;width:auto" type="checkbox" name="event-charge" value="${esc(uid)}"> Seleziona</label>`:''}<b>${esc(name(u))}</b><br><small class="muted">${euro(u?.balance||0)}</small></td><td><select data-resp="${e.id}" data-u="${uid}" ${e.required||P[uid]?'disabled':''}><option value="" ${!R[uid]?'selected':''}>In attesa</option><option value="yes" ${att?'selected':''}>Partecipa</option><option value="no" ${R[uid]==='no'?'selected':''}>Non partecipa</option></select></td><td>${P[uid]?`<span class="pos">✓ Pagato</span> <small>${P[uid].method==='credit'?'Credito':'Contanti'}</small>`:`<button class="ghost" data-act="pay" data-id="${e.id}" data-u="${uid}" data-m="credit" ${att?'':'disabled'}>Credito</button> <button class="ghost" data-act="pay" data-id="${e.id}" data-u="${uid}" data-m="cash" ${att?'':'disabled'}>Contanti</button>`}</td></tr>`;}).join('')}</tbody></table></div>`);
 }
 async function respond(id,uid,val){
   const e=events.find(x=>x.id===id);if(!e.invitees.includes(uid))throw Error('Non invitato.');if((e.payments||{})[uid])throw Error('Quota già pagata.');
@@ -230,10 +272,13 @@ async function respond(id,uid,val){
 const acts={
   close:closeModal,nav:id=>{page=id;render();},
   switch:()=>{mode=mode==='op'?'user':'op';page=op()?'home':'card';render();},
-  logout:()=>{unsubs.forEach(f=>f());unsubs=[];localStorage.removeItem('bar-user');me=null;stopCam();loginView();},
-  account,scan,kind:id=>{kind=id;render();},
-  add:id=>{cart[id]=(cart[id]||0)+1;pos();},less:id=>{if(--cart[id]<=0)delete cart[id];pos();},quick:id=>{$('#amount').value=id;},
-  seluser:id=>{selected=id;cart={};page='pos';render();},
+  logout:()=>{unsubscribePush?.();unsubscribePush=null;users=[];products=[];events=[];tx=[];notes=[];pending=null;unsubs.forEach(f=>f());unsubs=[];localStorage.removeItem('bar-user');me=null;stopCam();loginView();},
+  account,scan,findperson:findPerson,selectperson:id=>openPerson(id,'home'),
+  backperson:()=>{pending=null;cart={};draft={};page=backPage;render();},
+  kind:id=>{if(kind!==id){kind=id;draft={};render();}},
+  confirmtx:async()=>{if(!pending)return;const {id,amount,reason}=pending;const notified=await commitTx(id,amount,reason);pending=null;cart={};draft={};kind='';closeModal();render();toast(notified?'Operazione registrata.':'Operazione registrata. Invio notifica non riuscito.');},
+  add:id=>{cart[id]=(cart[id]||0)+1;pos();},less:id=>{if(--cart[id]<=0)delete cart[id];pos();},quick:id=>{$('#amount').value=id;draft.amount=id;},
+  seluser:id=>openPerson(id,'people'),
   showqr:id=>{const u=U(id);modal('Tessera · '+esc(name(u)),`<div class="qr" style="max-width:280px">${qr(u)}</div><p class="muted tiny" style="text-align:center">Codice: BAR:${esc(u.token)}</p>`);},
   newuser:()=>modal('Nuovo collega',`<form id="newuser"><label>Nome<input name="first" required></label><label>Cognome<input name="last" required></label><label>Password primo accesso<input name="pass" type="password" required></label><label>Ruolo<select name="role"><option value="user">Utente</option><option value="operator">Operatore</option></select></label><p class="muted tiny">Username automatico: nome.cognome</p><button class="primary full">Crea</button></form>`),
   role:id=>{const u=U(id);modal('Ruolo · '+esc(name(u)),`<form id="roleform" data-id="${id}"><select name="role"><option value="user" ${u.role==='user'?'selected':''}>Utente</option><option value="operator" ${u.role==='operator'?'selected':''}>Operatore</option></select><button class="primary full">Salva</button></form>`);},
@@ -247,13 +292,26 @@ const acts={
     const e=events.find(x=>x.id===id),uid=el.dataset.u,m=el.dataset.m,u=U(uid);
     if(!(e.required||(e.responses||{})[uid]==='yes'))throw Error('Conferma prima l\'adesione.');if((e.payments||{})[uid])throw Error('Già pagato.');
     if(!confirm(`Registrare ${euro(e.fee)} per ${name(u)} tramite ${m==='credit'?'credito tessera':'contanti già ricevuti'}?`))return;
-    if(m==='credit')await commitTx(uid,-e.fee,'Quota evento: '+e.title,{event:id});else await notify([uid],`Pagamento in contanti registrato: ${e.title} · ${euro(e.fee)}.`,'Pagamento registrato.');
-    await db.collection('events').doc(id).update({['payments.'+uid]:{method:m,actor:me.id,at:new Date().toISOString()}});
-    setTimeout(()=>eventDetail(id),400);toast('Pagamento registrato');
+    const notified=await commitTx(uid,m==='credit'?-e.fee:0,'Quota evento: '+e.title,id);
+    setTimeout(()=>{if($('#modal').open)eventDetail(id);},400);
+    toast(notified?'Pagamento registrato':'Pagamento registrato. Invio notifica non riuscito.');
+  },
+  paybulk:async id=>{
+    const e=events.find(x=>x.id===id);
+    const ids=[...document.querySelectorAll('[name="event-charge"]:checked')].map(x=>x.value);
+    if(!ids.length)throw Error('Seleziona almeno un partecipante.');
+    if(!confirm(`Addebitare ${euro(e.fee)} a ${ids.length} colleghi (totale ${euro(e.fee*ids.length)})?`))return;
+    let paid=0,failed=0,warnings=0;
+    for(const uid of ids){
+      try{if(!await commitTx(uid,-e.fee,'Quota evento: '+e.title,id))warnings++;paid++;}
+      catch{failed++;}
+    }
+    setTimeout(()=>{if($('#modal').open)eventDetail(id);},400);
+    toast(`Quote registrate: ${paid} · Non registrate: ${failed}${warnings?' · Notifiche non inviate: '+warnings:''}`);
   },
   readall:async()=>{const b=db.batch();notes.filter(n=>!n.read).forEach(n=>b.update(db.collection('notes').doc(n.id),{read:true}));await b.commit();},
-  pushon:async()=>{await enablePush(false);toast('Notifiche attivate su questo dispositivo.');},
-  pushoff:async()=>{const id=localStorage.getItem('bar-push-id');if(id)await db.collection('devices').doc(id).delete();localStorage.removeItem('bar-push');localStorage.removeItem('bar-push-id');toast('Notifiche disattivate.');}
+  pushon:async()=>{await enablePush(false);render();toast('Notifiche attivate su questo dispositivo.');},
+  pushoff:async()=>{const id=localStorage.getItem('bar-push-id');if(id)await db.collection('devices').doc(id).delete();localStorage.removeItem('bar-push');localStorage.removeItem('bar-push-id');localStorage.removeItem('bar-push-user');unsubscribePush?.();unsubscribePush=null;render();toast('Notifiche disattivate.');}
 };
 function prodForm(id){
   const p=products.find(p=>p.id===id);
@@ -265,13 +323,18 @@ let busy=false;
 async function run(fn){if(busy)return;busy=true;try{await fn();}catch(e){toast(e.message);}finally{busy=false;}}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(b)run(()=>acts[b.dataset.act]?.(b.dataset.id,null,b));});
 document.addEventListener('input',e=>{
-  if(e.target.id==='search'){const q=e.target.value.toLowerCase();[...$('#sel').options].forEach(o=>o.hidden=o.value&&!o.text.toLowerCase().includes(q));}
+  if(e.target.form?.id==='opform')draft[e.target.name]=e.target.value;
+  if(e.target.id==='person-search'){
+    const q=slug(e.target.value);
+    const results=[...document.querySelectorAll('[data-person]')];
+    results.forEach(button=>button.hidden=!button.dataset.person.includes(q));
+    $('#no-person').hidden=results.some(button=>!button.hidden);
+  }
   if(e.target.id==='filter'){const q=e.target.value.toLowerCase();document.querySelectorAll('[data-p]').forEach(r=>r.hidden=!r.dataset.p.includes(q));}
 });
-document.addEventListener('focusout',()=>{setTimeout(()=>{if(dirty)render();},150);});
+document.addEventListener('focusout',()=>{setTimeout(()=>{if(dirty&&!$('#modal').open)render();},150);});
 document.addEventListener('change',e=>run(async()=>{
   const t=e.target;
-  if(t.id==='sel'){selected=t.value;cart={};pos();}
   if(t.id==='hu'||t.id==='ht')filterHist();
   if(t.id==='allinv')document.querySelectorAll('[name="inv"]').forEach(c=>c.checked=t.checked);
   if(t.dataset.resp){await respond(t.dataset.resp,t.dataset.u,t.value);setTimeout(()=>eventDetail(t.dataset.resp),400);}
@@ -281,9 +344,9 @@ document.addEventListener('submit',ev=>{
   run(async()=>{switch(f.id){
     case 'login':{const un=d.u.trim().toLowerCase(),doc=await db.collection('users').doc(un).get();
       if(!doc.exists||doc.data().pass!==await sha(d.p))throw Error('Credenziali non corrette.');
-      localStorage.setItem('bar-user',doc.id);session(doc.data());
-      if(un==='admin'&&d.p==='admin'){me.firstPass=true;setTimeout(()=>{toast('Cambia la password iniziale!');account();},600);}
-      if('Notification' in window&&Notification.permission==='default')Notification.requestPermission();break;}
+      session(doc.data());
+      if(un==='admin'&&d.p==='admin'){setTimeout(()=>{toast('Cambia la password iniziale!');account();},600);}
+      break;}
     case 'pwform':if(d.p!==d.r)throw Error('Le password non coincidono.');await db.collection('users').doc(me.id).update({pass:await sha(d.p)});closeModal();toast('Password aggiornata');break;
     case 'resetform':await db.collection('users').doc(f.dataset.id).update({pass:await sha(d.p)});closeModal();toast('Password reimpostata');break;
     case 'newuser':{const base=slug(d.first)+'.'+slug(d.last);if(base==='.'||!slug(d.first)||!slug(d.last))throw Error('Nome non valido.');let un=base,n=2;while((await db.collection('users').doc(un).get()).exists)un=base+n++;
@@ -291,17 +354,38 @@ document.addEventListener('submit',ev=>{
     case 'roleform':await db.collection('users').doc(f.dataset.id).update({role:d.role});closeModal();break;
     case 'prodform':{const price=money(d.price),id=f.dataset.id;if(id)await db.collection('products').doc(id).update({title:d.title.trim(),price,icon:d.icon});else{const r=db.collection('products').doc();await r.set({id:r.id,title:d.title.trim(),price,icon:d.icon,active:true});}closeModal();break;}
     case 'opform':{
-      if(!selected)throw Error('Seleziona un collega.');
-      if(kind==='credit'){await commitTx(selected,money(d.amount),d.reason.trim()||'Ricarica contanti');}
-      else{let total=0;const lines=[];for(const [id,q] of Object.entries(cart)){const p=products.find(p=>p.id===id);total+=p.price*q;lines.push(q+' × '+p.title);}
-        if(d.amount.trim()){if(!d.reason.trim())throw Error('Inserisci la causale.');total+=money(d.amount);lines.push(d.reason.trim());}
-        if(!total)throw Error('Carrello vuoto.');await commitTx(selected,-total,lines.join(' · '));}
-      cart={};toast('Operazione registrata.');break;}
+      const u=U(selected);
+      if(!u)throw Error('Seleziona un collega.');
+      let amount=0;
+      const lines=[];
+      if(kind==='credit'){
+        amount=money(d.amount);
+        lines.push([d.reason.trim()||'Accredito contanti',amount]);
+      }else{
+        for(const [id,q] of Object.entries(cart)){
+          const p=products.find(p=>p.id===id&&p.active);
+          if(!p)throw Error('Un prodotto del carrello non è più disponibile.');
+          lines.push([q+' × '+p.title,p.price*q]);
+        }
+        if(d.amount.trim()){
+          if(!d.reason.trim())throw Error('Inserisci la causale.');
+          lines.push([d.reason.trim(),money(d.amount)]);
+        }
+        if(!lines.length)throw Error('Carrello vuoto.');
+        amount=-lines.reduce((sum,[,price])=>sum+price,0);
+      }
+      pending={id:u.id,amount,reason:lines.map(([label])=>label).join(' · ')};
+      modal(kind==='credit'?'Conferma accredito':'Conferma addebito',`<p><b>${esc(name(u))}</b></p>
+        ${lines.map(([label,price])=>`<p>${esc(label)} · ${euro(price)}</p>`).join('')}
+        <p class="total">Totale <b>${euro(Math.abs(amount))}</b></p>
+        <p>Saldo attuale ${euro(u.balance||0)} · Saldo previsto <b>${euro((u.balance||0)+amount)}</b></p>
+        <div class="row"><button class="ghost" data-act="close">Annulla</button><button class="primary" data-act="confirmtx">Conferma</button></div>`);
+      break;}
     case 'eventform':{const inv=new FormData(f).getAll('inv');if(!inv.length)throw Error('Seleziona almeno un invitato.');
       const r=db.collection('events').doc(),req=d.part==='required';
       await r.set({id:r.id,title:d.title.trim(),date:d.date,fee:money(d.fee),description:(d.description||'').trim(),required:req,invitees:inv,responses:{},payments:{},createdAt:new Date().toISOString(),actor:me.id});
-      await notify(inv,`Nuovo evento ${req?'obbligatorio':'facoltativo'}: ${d.title.trim()}. ${req?'Adesione non richiesta.':'Conferma la tua adesione nella sezione Eventi.'}`,'È disponibile un nuovo evento.');
-      closeModal();toast('Evento creato');break;}
+      const notified=await notify(inv,`Nuovo evento ${req?'obbligatorio':'facoltativo'}: ${d.title.trim()}. ${req?'Adesione non richiesta.':'Conferma la tua adesione nella sezione Eventi.'}`,'È disponibile un nuovo evento.').then(()=>true,()=>false);
+      closeModal();toast(notified?'Evento creato':'Evento creato. Invio notifica non riuscito.');break;}
     case 'manual':resolveQR(d.c);break;
   }});
 });
